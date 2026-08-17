@@ -1,7 +1,14 @@
 import time
 import numpy as np
 import pinocchio as pin
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+import os
+from datetime import datetime
+
 from cybergear import CyberGear
 from scipy.interpolate import CubicSpline, CubicHermiteSpline
 
@@ -21,10 +28,11 @@ motors = CyberGear({LH_MOTOR_ID: "Cybergear", LK_MOTOR_ID: "Cybergear",
 print("CyberGear motors enabled.")
 
 STATE_IDX = {LK_MOTOR_ID: 1, LH_MOTOR_ID: 2, RH_MOTOR_ID: 3, RK_MOTOR_ID: 4}
-SAFETY_KP = 2.0
+
+SAFETY_KP = 2.0  # prev 2.0
 SAFETY_KD = 0.3
 TORQUE_LIMIT = 0.7
-SOFT_START_S = 0.05
+SOFT_START_S = 0.005
 
 ################## 2. Controller #####################
 # (2.a) intitialize pinocchio biped model and load + interpolate reference trajectories
@@ -35,8 +43,21 @@ pin_d = biped.createData()
 
 # x_ref = np.load(r"C:\Users\julie\OneDrive - Georgia Institute of Technology\courses\Capstone\Code\Biped_Simulation\Data\Xsol_without-height.npy")
 # u_ref = np.load(r"C:\Users\julie\OneDrive - Georgia Institute of Technology\courses\Capstone\Code\Biped_Simulation\Data\Usol_without-height.npy")
-x_ref = np.load(r"/home/bliss/biped_ws/Xsol_without-height.npy")
-u_ref = np.load(r"/home/bliss/biped_ws/Usol_without-height.npy")
+# x_ref = np.load(r"/home/bliss/biped_ws/Xsol_without-height.npy")
+# u_ref = np.load(r"/home/bliss/biped_ws/Usol_without-height.npy")
+# x_ref = np.load(r"/home/bliss/biped_ws/Xsol_0.3_periodic_0.4.npy")
+# u_ref = np.load(r"/home/bliss/biped_ws/Usol_0.3_periodic_0.4.npy")
+
+x_ref_path = r"/home/bliss/biped_ws/Xsol_0.2_periodic_0.2_wheight.npy"
+u_ref_path = r"/home/bliss/biped_ws/Usol_0.2_periodic_0.2_wheight.npy"
+
+# x_ref_path = r"/home/bliss/biped_ws/Xsol_0.2_periodic_0.2_wheight_restricted.npy"
+# u_ref_path = r"/home/bliss/biped_ws/Usol_0.2_periodic_0.2_wheight_restricted.npy"
+
+#
+
+x_ref = np.load(x_ref_path)
+u_ref = np.load(u_ref_path)
 
 x_ref = -x_ref
 u_ref = -u_ref
@@ -44,6 +65,13 @@ u_ref = -u_ref
 step_duration = 0.2
 dt = np.linspace(0.0, step_duration, x_ref.shape[0])
 x_reconstruct = CubicHermiteSpline(dt, x_ref[:, :5], x_ref[:, 5:], axis=0)
+a_ref = x_reconstruct(dt, 2)
+
+tau = np.zeros((x_ref.shape[0], biped.nv))
+for k in range(x_ref.shape[0]):
+    tau[k] = pin.rnea(biped, pin_d, x_ref[k, :5], x_ref[k, 5:], a_ref[k])
+
+u_ref = tau[:, 1:]
 u_reconstruct = CubicSpline(dt, u_ref, axis=0)
 
 # (2.b) initialize pinocchio controller
@@ -93,8 +121,8 @@ def _get_states():
     v_measured = np.array([0.0, lk_data.current_velocity, lh_data.current_velocity,
                             rh_data.current_velocity, rk_data.current_velocity])
 
-    p_measured = -1*p_measured
-    v_measured = -1*v_measured
+    p_measured = p_measured
+    v_measured = v_measured
 
     # print(f"p_measured: {p_measured}")
     # print(f"v_measured: {v_measured}")
@@ -117,7 +145,6 @@ def _send_command(t, u, p_ref, v_ref):
 
     for motor_id, idx in STATE_IDX.items():
         motors._send_motion_command(motor_id, position=p_ref[idx], velocity=v_ref[idx], kp=SAFETY_KP * ramp, kd=SAFETY_KD * ramp, torque=u[idx -1],)
-
     return u
 
 class Logger:
@@ -127,6 +154,21 @@ class Logger:
         self.x_real = []
         self.u_ref = []
         self.u_real = []
+
+        # Get trajectory name from x_ref filename
+        trajectory_name = os.path.splitext(
+            os.path.basename(x_ref_path)
+        )[0]
+
+        # Add timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        # Create folder
+        folder_name = f"{trajectory_name}_{timestamp}"
+        self.plot_dir = os.path.join("plots", folder_name)
+
+        os.makedirs(self.plot_dir, exist_ok=True)
+        print(f"Saving plots to: {self.plot_dir}")
+
 
     def log(self, t, x_ref, x_real, u_ref, u_real):
         self.time.append(t)
@@ -149,15 +191,22 @@ class Logger:
 
         actuator_names = ["Left knee", "Left hip", "Right hip", "Right knee"]
 
-        # for i, name in enumerate(state_names):
-        #     plt.figure(figsize=(10, 4))
-        #     plt.plot(time, x_ref[:, i], label="Reference")
-        #     plt.plot(time, x_real[:, i], "--", label="Measured")
-        #     plt.xlabel("Time [s]")
-        #     plt.ylabel("Position [rad]")
-        #     plt.title(name)
-        #     plt.grid()
-        #     plt.legend()
+        for i, name in enumerate(state_names):
+            plt.figure(figsize=(10, 4))
+            plt.plot(time, x_ref[:, i], label="Reference")
+            plt.plot(time, x_real[:, i], "--", label="Measured")
+            plt.xlabel("Time [s]")
+            plt.ylabel("Position [rad]")
+            plt.title(name)
+            plt.grid()
+            plt.legend()
+
+            filename = f"{name.lower().replace(' ', '_')}.png"
+            filepath = os.path.join(self.plot_dir, filename)
+
+            plt.savefig(filepath, dpi=150, bbox_inches="tight")
+            plt.close()
+            print(f"Saved: {filepath}")
 
         for i, name in enumerate(actuator_names):
             plt.figure(figsize=(10, 4))
@@ -169,10 +218,29 @@ class Logger:
             plt.grid()
             plt.legend()
 
-        plt.show()
+            filename = f"{name.lower().replace(' ', '_')}_torque.png"
+            filepath = os.path.join(self.plot_dir, filename)
+
+            plt.savefig(filepath,dpi=150,bbox_inches="tight")
+            plt.close()
+            print(f"Saved: {filepath}")
+
+        # plt.show()
 
 
 ################## 4. Main control loop #####################
+
+# input("hit enter to get the last position")
+# # last_position = [-0.19531548,  0.05321584, -0.37441825,  0.11348898,  0.40302892]
+# last_position = x_ref[-1]
+# print(f"last_position: {last_position}")
+# for i, motor_id in enumerate(STATE_IDX):
+#     # motors._send_motion_command(motor_id, last_position[i+1], 0, 0, 0, 0)
+#     motors.set_position(motor_id, last_position[i+1], kp=3,kd=0.2)
+
+# (4.b) control loop
+CONTROL_DT = 0.002
+
 # (4.a) set initial states
 input("Press Enter to configure robot to its initial pose.")
 row_init = x_ref[0]
@@ -181,13 +249,12 @@ lhip_angle_init = row_init[2]
 rhip_angle_init = row_init[3]
 rknee_angle_init = row_init[4]
 
-# motors.set_position(LH_MOTOR_ID, lhip_angle_init,kp=3,kd=0.2)
-# motors.set_position(LK_MOTOR_ID, lknee_angle_init,kp=3,kd=0.2)
-# motors.set_position(RH_MOTOR_ID, rhip_angle_init,kp=3,kd=0.2)
-# motors.set_position(RK_MOTOR_ID, rknee_angle_init,kp=3,kd=0.2)
+motors.set_position(LH_MOTOR_ID, lhip_angle_init,kp=3,kd=0.2)
+motors.set_position(LK_MOTOR_ID, lknee_angle_init,kp=3,kd=0.2)
+motors.set_position(RH_MOTOR_ID, rhip_angle_init,kp=3,kd=0.2)
+motors.set_position(RK_MOTOR_ID, rknee_angle_init,kp=3,kd=0.2)
 
-# (4.b) control loop
-CONTROL_DT = 0.002
+input("Hit Enter to start control")
 
 def main():
     logger = Logger()
@@ -204,6 +271,8 @@ def main():
 
             p_measured, v_measured = _get_states()
             p_ref, v_ref, uff, a_ref = interpolation(t)
+            # print(f"p measured: {p_measured}")
+            # print(f"p reference: {p_ref}")
             
             if controller == "PD":
                 u = C.compute(p_ref, v_ref, p_measured, v_measured, uff, a_ref)
@@ -212,6 +281,7 @@ def main():
                 u = C.compute(p_ref, v_ref, p_measured, v_measured, uff, a_ref, t)
 
             u_sent = _send_command(t, u, p_ref, v_ref)
+            # print(f"U sent: {u_sent}")
             logger.log(t, p_ref, p_measured, uff, u_sent)
             
             next_step += CONTROL_DT
@@ -219,10 +289,19 @@ def main():
             sleep_time = next_step - time.perf_counter()
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
     finally:
-        for motor_id in STATE_IDX:
-            motors._send_motion_command(motor_id, 0, 0, 0, 0, 0)
+        time.sleep(0.1)
+        last_position, __ = _get_states()
+        print(f"p_ref final: {p_ref}")
+        for i, motor_id in enumerate(STATE_IDX):
+            # motors._send_motion_command(motor_id, last_position[i+1], 0, 0, 0, 0)
+            motors.set_position(motor_id, p_ref[i+1], kp=3,kd=0.2)
         print("Motors stopped")
+        # motors.cleanup()s
+        logger.plot()
+        
+
 
 if __name__ == "__main__":
     main()

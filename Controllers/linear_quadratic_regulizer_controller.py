@@ -72,4 +72,4 @@ class TVLQR:
         K_t = self._gain_at_t(t)
         ufb = K_t @ e_x
         u = uff + ufb
-        return uff
+        return u

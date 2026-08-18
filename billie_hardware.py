@@ -30,9 +30,9 @@ print("CyberGear motors enabled.")
 STATE_IDX = {LK_MOTOR_ID: 1, LH_MOTOR_ID: 2, RH_MOTOR_ID: 3, RK_MOTOR_ID: 4}
 
 SAFETY_KP = 2.0  # prev 2.0
-SAFETY_KD = 0.3
-TORQUE_LIMIT = 0.7
-SOFT_START_S = 0.005
+SAFETY_KD = 0.5
+TORQUE_LIMIT = 2.0
+SOFT_START_S = 0.000001
 
 ################## 2. Controller #####################
 # (2.a) intitialize pinocchio biped model and load + interpolate reference trajectories
@@ -43,26 +43,25 @@ pin_d = biped.createData()
 
 # x_ref = np.load(r"C:\Users\julie\OneDrive - Georgia Institute of Technology\courses\Capstone\Code\Biped_Simulation\Data\Xsol_without-height.npy")
 # u_ref = np.load(r"C:\Users\julie\OneDrive - Georgia Institute of Technology\courses\Capstone\Code\Biped_Simulation\Data\Usol_without-height.npy")
-# x_ref = np.load(r"/home/bliss/biped_ws/Xsol_without-height.npy")
-# u_ref = np.load(r"/home/bliss/biped_ws/Usol_without-height.npy")
-# x_ref = np.load(r"/home/bliss/biped_ws/Xsol_0.3_periodic_0.4.npy")
-# u_ref = np.load(r"/home/bliss/biped_ws/Usol_0.3_periodic_0.4.npy")
 
-x_ref_path = r"/home/bliss/biped_ws/Xsol_0.2_periodic_0.2_wheight.npy"
-u_ref_path = r"/home/bliss/biped_ws/Usol_0.2_periodic_0.2_wheight.npy"
-
-# x_ref_path = r"/home/bliss/biped_ws/Xsol_0.2_periodic_0.2_wheight_restricted.npy"
-# u_ref_path = r"/home/bliss/biped_ws/Usol_0.2_periodic_0.2_wheight_restricted.npy"
-
-#
+# n = number of steps
+n = 40
+if n == 1:
+    x_ref_path = r"/home/bliss/biped_ws/Xsol_0.2_periodic_0.2_wheight.npy"
+    u_ref_path = r"/home/bliss/biped_ws/Usol_0.2_periodic_0.2_wheight.npy"
+else:
+    x_ref_path = r"/home/bliss/biped_ws/Xsol_full_0.2_periodic_0.2_wheight.npy"
+    u_ref_path = r"/home/bliss/biped_ws/Usol_full_0.2_periodic_0.2_wheight.npy"
 
 x_ref = np.load(x_ref_path)
 u_ref = np.load(u_ref_path)
 
+x_ref = np.tile(x_ref, (20, 1))
+
 x_ref = -x_ref
 u_ref = -u_ref
 
-step_duration = 0.2
+step_duration = 0.2 * n
 dt = np.linspace(0.0, step_duration, x_ref.shape[0])
 x_reconstruct = CubicHermiteSpline(dt, x_ref[:, :5], x_ref[:, 5:], axis=0)
 a_ref = x_reconstruct(dt, 2)
@@ -75,19 +74,19 @@ u_ref = tau[:, 1:]
 u_reconstruct = CubicSpline(dt, u_ref, axis=0)
 
 # (2.b) initialize pinocchio controller
-controller = "TVLQR"
+controller = "PD"
 
 if controller == "PD":
     Kp = np.array([
-            [100, 0,   0,  0],
-            [0, 100, 0,  0],
-            [0, 0,  100,  0],
-            [0, 0,   0, 100]])
+            [5, 0,   0,  0],
+            [0, 5, 0,  0],
+            [0, 0,  5,  0],
+            [0, 0,   0, 5]])
     Kd = np.array([
-            [0.01, 0,  0,  0],
-            [0,  0.01, 0,  0],
-            [0,  0, 0.01,  0],
-            [0,  0,  0, 0.01]])
+            [0.1, 0,  0,  0],
+            [0,  0.1, 0,  0],
+            [0,  0, 0.1,  0],
+            [0,  0,  0, 0.1]])
     C = PDController(Kp, Kd)
 
 elif controller == "FBL":
@@ -141,10 +140,19 @@ def _gain_ramp(t):
 
 def _send_command(t, u, p_ref, v_ref):
     ramp = _gain_ramp(t)
-    u = np.clip(u, -TORQUE_LIMIT, TORQUE_LIMIT) * ramp
+    # u = np.clip(u, -TORQUE_LIMIT, TORQUE_LIMIT) * ramp
+    u = np.clip(u, -TORQUE_LIMIT, TORQUE_LIMIT)
 
     for motor_id, idx in STATE_IDX.items():
-        motors._send_motion_command(motor_id, position=p_ref[idx], velocity=v_ref[idx], kp=SAFETY_KP * ramp, kd=SAFETY_KD * ramp, torque=u[idx -1],)
+        motors._send_motion_command(motor_id, position=p_ref[idx], velocity=v_ref[idx], kp=SAFETY_KP, kd=SAFETY_KD, torque=u[idx -1],)
+        # motors._send_motion_command(motor_id, position=p_ref[idx], velocity=v_ref[idx], kp=SAFETY_KP * ramp, kd=SAFETY_KD * ramp, torque=u[idx -1],)
+    
+    # motors._send_motion_command(LK_MOTOR_ID, position=p_ref[1], velocity=v_ref[1], kp=2, kd=0.5, torque=u[0])
+    # motors._send_motion_command(LH_MOTOR_ID, position=p_ref[2], velocity=v_ref[2], kp=2, kd=0.5, torque=u[1])
+    # motors._send_motion_command(RH_MOTOR_ID, position=p_ref[3], velocity=v_ref[3], kp=1, kd=1, torque=u[2])
+    # motors._send_motion_command(RK_MOTOR_ID, position=p_ref[4], velocity=v_ref[4], kp=1, kd=1, torque=u[3])
+
+    
     return u
 
 class Logger:
@@ -208,13 +216,14 @@ class Logger:
             plt.close()
             print(f"Saved: {filepath}")
 
-        for i, name in enumerate(actuator_names):
+        # for i, name in enumerate(actuator_names):
+        for i, name in enumerate(state_names):
             plt.figure(figsize=(10, 4))
-            plt.plot(time, u_ref[:, i], label="Feedforward reference")
-            plt.plot(time, u_real[:, i], "--", label="Applied torque")
+            plt.plot(time, u_ref[:, i], label="reference velocity")
+            plt.plot(time, u_real[:, i], "--", label="measured velocity")
             plt.xlabel("Time [s]")
-            plt.ylabel("Torque [Nm]")
-            plt.title(f"{name} torque")
+            plt.ylabel("Velocity [m/s]")
+            plt.title(f"{name} velocity")
             plt.grid()
             plt.legend()
 
@@ -255,6 +264,9 @@ motors.set_position(RH_MOTOR_ID, rhip_angle_init,kp=3,kd=0.2)
 motors.set_position(RK_MOTOR_ID, rknee_angle_init,kp=3,kd=0.2)
 
 input("Hit Enter to start control")
+p_measured, v_measured = _get_states()
+p_ref, v_ref, uff, a_ref = interpolation(0)
+_ = C.compute(p_ref, v_ref, p_measured, v_measured, uff, a_ref)
 
 def main():
     logger = Logger()
@@ -282,7 +294,9 @@ def main():
 
             u_sent = _send_command(t, u, p_ref, v_ref)
             # print(f"U sent: {u_sent}")
-            logger.log(t, p_ref, p_measured, uff, u_sent)
+            # logger.log(t, p_ref, p_measured, uff, u_sent)
+            logger.log(t, p_ref, p_measured, v_ref, v_measured)
+            print(f"t: {t}, p_measured: {p_measured[1]}")
             
             next_step += CONTROL_DT
             
@@ -291,7 +305,7 @@ def main():
                 time.sleep(sleep_time)
 
     finally:
-        time.sleep(0.1)
+        time.sleep(0.01)
         last_position, __ = _get_states()
         print(f"p_ref final: {p_ref}")
         for i, motor_id in enumerate(STATE_IDX):

@@ -24,8 +24,8 @@ LK_MOTOR_ID = 0x1
 RH_MOTOR_ID = 0x4
 RK_MOTOR_ID = 0x2
 
-KP = 3.0
-KD = 0.2
+KP = 10.0
+KD = 0.1
 
 # Create CyberGear object
 motors = CyberGear({LH_MOTOR_ID: "Cybergear", LK_MOTOR_ID: "Cybergear",
